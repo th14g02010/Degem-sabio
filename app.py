@@ -5,21 +5,13 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Configurações
-VALOR_ENTRADA_USD = 10
 LIQUIDEZ_MINIMA = 1500
-HOLDERS_MINIMO = 50
 VOLUME_MINIMO = 5000
-TAXA_MAXIMA = 0.05
-MAX_SUPPLY_POR_CARTEIRA = 0.15
-TWITTER_SEGUIDORES_MINIMO = 500
 
-# Estado do bot
 log_analises = []
 cache_aprovados = []
 tokens_analisados_ids = set()
 
-# HTML Template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -29,11 +21,10 @@ HTML_TEMPLATE = """
         body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f4; }
         h1 { text-align: center; }
         table { width: 100%; border-collapse: collapse; background-color: white; margin-top: 20px; }
-        th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+        th, td { border: 1px solid #ccc; padding: 10px; text-align: center; font-size: 14px; }
         th { background-color: #222; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
         .aprovado { background-color: #d4edda; }
-        .reprovado { background-color: #f8d7da; }
     </style>
 </head>
 <body>
@@ -43,20 +34,22 @@ HTML_TEMPLATE = """
             <th>Nome</th>
             <th>Status</th>
             <th>Preço (USD)</th>
-            <th>Valor Atual (USD)</th>
-            <th>Lucro/Prejuízo</th>
+            <th>Liquidez</th>
+            <th>Volume 2h</th>
             <th>Avaliado Em</th>
-            <th>Falhas</th>
+            <th>Contrato</th>
+            <th>Social</th>
         </tr>
         {% for token in tokens %}
-        <tr class="{{ 'aprovado' if token.status == 'APROVADO' else 'reprovado' }}">
+        <tr class="aprovado">
             <td>{{ token.nome }}</td>
             <td>{{ token.status }}</td>
             <td>{{ token.preco_usd }}</td>
-            <td>{{ token.valor_atual_usd }}</td>
-            <td>{{ token.lucro_prejuizo_usd }}</td>
+            <td>${{ token.liquidez }}</td>
+            <td>${{ token.volume_2h }}</td>
             <td>{{ token.avaliado_em }}</td>
-            <td>{{ token.falhas|join(', ') }}</td>
+            <td><a href="https://solscan.io/token/{{ token.contrato }}" target="_blank">{{ token.contrato[:6] }}...{{ token.contrato[-4:] }}</a></td>
+            <td>{% if token.social %}<a href="{{ token.social }}" target="_blank">link{% else %}-{% endif %}</a></td>
         </tr>
         {% endfor %}
     </table>
@@ -64,7 +57,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# Buscar tokens da GeckoTerminal (várias páginas)
 def buscar_tokens_gecko(paginas=5):
     tokens = []
     for page in range(1, paginas + 1):
@@ -74,65 +66,44 @@ def buscar_tokens_gecko(paginas=5):
             tokens += response.json().get("data", [])
     return tokens
 
-# Simular dados complementares
 def simular_dados_extras(pool):
     attrs = pool.get("attributes", {})
+    socials = attrs.get("websites", []) + attrs.get("twitter", [])
     return {
         "nome": attrs.get("name", "Sem nome"),
         "id": pool.get("id"),
+        "contrato": pool.get("relationships", {}).get("base_token", {}).get("data", {}).get("id", "").split("_")[-1],
         "liquidez": float(attrs.get("reserve_in_usd", 0)),
-        "holders": 60,
         "volume_2h": float(attrs.get("volume_usd", {}).get("h1", 0)) * 2,
-        "contrato_seguro": True,
-        "taxa_total": 0.03,
-        "maior_wallet_pct": 0.14,
-        "twitter_seguidores": 750,
-        "tem_site": True,
-        "preco": float(attrs.get("base_token_price_usd", 0.0005))
+        "preco": float(attrs.get("base_token_price_usd", 0.0005)),
+        "social": socials[0] if socials else ""
     }
 
-# Avaliação dos critérios
 def avaliar_token(pool):
     extras = simular_dados_extras(pool)
     if extras["id"] in tokens_analisados_ids:
         return None
 
     tokens_analisados_ids.add(extras["id"])
-    falhas = []
 
-    if extras["liquidez"] < LIQUIDEZ_MINIMA:
-        falhas.append("LIQUIDEZ < 1500")
-    if extras["holders"] < HOLDERS_MINIMO:
-        falhas.append("HOLDERS < 50")
-    if extras["volume_2h"] < VOLUME_MINIMO:
-        falhas.append("VOLUME < 5000")
-    if not extras["contrato_seguro"]:
-        falhas.append("CONTRATO INSEGURO")
-    if extras["taxa_total"] > TAXA_MAXIMA:
-        falhas.append("TAXA > 5%")
-    if extras["maior_wallet_pct"] > MAX_SUPPLY_POR_CARTEIRA:
-        falhas.append("CARTEIRA > 15%")
-    if extras["twitter_seguidores"] < TWITTER_SEGUIDORES_MINIMO:
-        falhas.append("TWITTER < 500")
-    if not extras["tem_site"]:
-        falhas.append("SEM SITE")
+    if (
+        extras["liquidez"] >= LIQUIDEZ_MINIMA and
+        extras["volume_2h"] >= VOLUME_MINIMO
+    ):
+        return {
+            "nome": extras["nome"],
+            "preco_usd": round(extras["preco"], 8),
+            "liquidez": round(extras["liquidez"], 2),
+            "volume_2h": round(extras["volume_2h"], 2),
+            "avaliado_em": datetime.utcnow().isoformat() + "Z",
+            "status": "APROVADO",
+            "contrato": extras["contrato"],
+            "social": extras["social"]
+        }
+    return None
 
-    aprovado = len(falhas) == 0
-    valor_atual = (VALOR_ENTRADA_USD / extras["preco"]) * extras["preco"]
-
-    return {
-        "nome": extras["nome"],
-        "preco_usd": round(extras["preco"], 8),
-        "valor_atual_usd": round(valor_atual, 2),
-        "lucro_prejuizo_usd": round(valor_atual - VALOR_ENTRADA_USD, 2),
-        "avaliado_em": datetime.utcnow().isoformat() + "Z",
-        "status": "APROVADO" if aprovado else "REPROVADO",
-        "falhas": falhas
-    }
-
-# Escaneamento automático a cada 3 minutos
 def escanear_periodicamente():
-    global cache_aprovados, log_analises
+    global cache_aprovados
     try:
         pools = buscar_tokens_gecko(paginas=5)
         novos = []
@@ -141,9 +112,8 @@ def escanear_periodicamente():
             if resultado:
                 novos.append(resultado)
         if novos:
-            cache_aprovados = [r for r in novos if r["status"] == "APROVADO"]
-            log_analises.extend(novos)
-            log_analises = log_analises[-50:]
+            cache_aprovados.extend(novos)
+            cache_aprovados = cache_aprovados[-100:]
             print(f"[{datetime.utcnow().isoformat()}] Escaneados: {len(novos)} novos tokens")
     except Exception as e:
         print("Erro ao escanear:", e)
@@ -155,8 +125,7 @@ def mostrar_aprovados():
 
 @app.route("/logs")
 def mostrar_logs():
-    return render_template_string(HTML_TEMPLATE, tokens=log_analises, titulo="Logs do Bot - Degem Sábio")
+    return render_template_string(HTML_TEMPLATE, tokens=cache_aprovados, titulo="Tokens Aprovados (Log Ativo)")
 
-# Iniciar escaneamento
 escanear_periodicamente()
 app.run(host="0.0.0.0", port=5000)
