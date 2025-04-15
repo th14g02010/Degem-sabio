@@ -1,7 +1,7 @@
 import requests
 
 def testar_conexao_dexscreener():
-    url = "https://api.dexscreener.com/latest/dex/pairs/solana"
+    url = "https://api.dexscreener.com/latest/pairs/solana"  # <- endpoint correto
     response = requests.get(url)
     
     print("Status Code:", response.status_code)
