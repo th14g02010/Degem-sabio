@@ -44,20 +44,36 @@ def simular_dados_extras(token):
 # Avaliar token com base na Regra do Degem Sábio
 def avaliar_token(token):
     extras = simular_dados_extras(token)
-    aprovado = (
-        extras["liquidez"] >= LIQUIDEZ_MINIMA and
-        extras["holders"] >= HOLDERS_MINIMO and
-        extras["volume_2h"] >= VOLUME_MINIMO and
-        extras["contrato_seguro"] and
-        extras["taxa_total"] <= TAXA_MAXIMA and
-        extras["maior_wallet_pct"] <= MAX_SUPPLY_POR_CARTEIRA and
-        extras["twitter_seguidores"] >= TWITTER_SEGUIDORES_MINIMO and
-        extras["tem_site"]
-    )
+    falhas = []
+
+    if extras["liquidez"] < LIQUIDEZ_MINIMA:
+        falhas.append("LIQUIDEZ < 1500")
+    if extras["holders"] < HOLDERS_MINIMO:
+        falhas.append("HOLDERS < 50")
+    if extras["volume_2h"] < VOLUME_MINIMO:
+        falhas.append("VOLUME < 5000")
+    if not extras["contrato_seguro"]:
+        falhas.append("CONTRATO INSEGURO")
+    if extras["taxa_total"] > TAXA_MAXIMA:
+        falhas.append("TAXA > 5%")
+    if extras["maior_wallet_pct"] > MAX_SUPPLY_POR_CARTEIRA:
+        falhas.append("CARTEIRA > 15%")
+    if extras["twitter_seguidores"] < TWITTER_SEGUIDORES_MINIMO:
+        falhas.append("TWITTER < 500")
+    if not extras["tem_site"]:
+        falhas.append("SEM SITE")
+
+    aprovado = len(falhas) == 0
     entrada_valor_atual = (VALOR_ENTRADA_USD / extras["preco_inicial"]) * extras["preco_atual"]
+
+    log = f"[{datetime.utcnow().isoformat()}] Token: {token.get('name', 'Sem nome')} - "
+    log += "APROVADO" if aprovado else f"REPROVADO ({', '.join(falhas)})"
+    print(log)
+
     return {
         "nome": token.get("name", "Sem nome"),
         "aprovado": aprovado,
+        "falhas": falhas,
         "valor_atual": round(entrada_valor_atual, 2),
         "lucro_prejuizo": round(entrada_valor_atual - VALOR_ENTRADA_USD, 2),
         "preco_inicial": extras["preco_inicial"],
@@ -67,10 +83,8 @@ def avaliar_token(token):
 
 @app.route("/tokens")
 def listar_tokens():
-    tokens_birdeye = buscar_tokens_birdeye()
-    print("TOKENS RECEBIDOS:", tokens_birdeye)
-    resultados = [avaliar_token(t) for t in tokens_birdeye[:10]]
-    print("RESULTADOS AVALIADOS:", resultados)
+    tokens = buscar_tokens_birdeye()
+    resultados = [avaliar_token(t) for t in tokens[:10]]
     return jsonify(resultados)
 
 app.run(host="0.0.0.0", port=5000)
