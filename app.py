@@ -1,105 +1,76 @@
-import time
 import requests
-import os
 from flask import Flask, jsonify
-from dotenv import load_dotenv
-from threading import Thread
-
-load_dotenv()
+from datetime import datetime
 
 app = Flask(__name__)
 
-estado_atual = {
-    "status": "Bot iniciado, aguardando dados...",
-    "ultimo_sinal": None
-}
+# Configuração
+API_KEY = "0b422d5f18874c8996e04ab8ea01fad1"
+VALOR_ENTRADA_USD = 10
+LIQUIDEZ_MINIMA = 1500
+HOLDERS_MINIMO = 50
+VOLUME_MINIMO = 5000
+TAXA_MAXIMA = 0.05
+MAX_SUPPLY_POR_CARTEIRA = 0.15
+TWITTER_SEGUIDORES_MINIMO = 500
 
-@app.route("/")
-def home():
-    return "Bot de sinais ativo com Bitget SPOT", 200
+# Função para buscar tokens novos na Solana via Birdeye
+def buscar_tokens_birdeye():
+    url = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
+    headers = {
+        "X-API-KEY": API_KEY,
+        "x-chain": "solana"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json().get("data", [])
+    return []
+
+# Simulação de dados extras (esses serão reais depois)
+def simular_dados_extras(token):
+    return {
+        "liquidez": 2000,
+        "holders": 60,
+        "volume_2h": 6000,
+        "contrato_seguro": True,
+        "taxa_total": 0.03,
+        "maior_wallet_pct": 0.14,
+        "twitter_seguidores": 750,
+        "tem_site": True,
+        "preco_inicial": float(token.get("price", 0.0005)),
+        "preco_atual": float(token.get("price", 0.0005))
+    }
+
+# Avaliar token com base na Regra do Degem Sábio
+def avaliar_token(token):
+    extras = simular_dados_extras(token)
+    aprovado = (
+        extras["liquidez"] >= LIQUIDEZ_MINIMA and
+        extras["holders"] >= HOLDERS_MINIMO and
+        extras["volume_2h"] >= VOLUME_MINIMO and
+        extras["contrato_seguro"] and
+        extras["taxa_total"] <= TAXA_MAXIMA and
+        extras["maior_wallet_pct"] <= MAX_SUPPLY_POR_CARTEIRA and
+        extras["twitter_seguidores"] >= TWITTER_SEGUIDORES_MINIMO and
+        extras["tem_site"]
+    )
+    entrada_valor_atual = (VALOR_ENTRADA_USD / extras["preco_inicial"]) * extras["preco_atual"]
+    return {
+        "nome": token.get("name", "Sem nome"),
+        "aprovado": aprovado,
+        "valor_atual": round(entrada_valor_atual, 2),
+        "lucro_prejuizo": round(entrada_valor_atual - VALOR_ENTRADA_USD, 2),
+        "preco_inicial": extras["preco_inicial"],
+        "preco_atual": extras["preco_atual"],
+        "avaliado_em": datetime.utcnow().isoformat() + "Z"
+    }
 
 @app.route("/tokens")
-def tokens():
-    return jsonify(estado_atual), 200
+def listar_tokens():
+    tokens_birdeye = buscar_tokens_birdeye()
+    print("TOKENS RECEBIDOS:", tokens_birdeye)
+    resultados = [avaliar_token(t) for t in tokens_birdeye[:10]]
+    print("RESULTADOS AVALIADOS:", resultados)
+    return jsonify(resultados)
 
-TP_MULT = 2.0
-SL_MULT = 1.0
-LIMIT = 100
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ENTRADA_USDT = float(os.getenv("ENTRADA_USDT", 50))
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print(f"[ERRO] Telegram: {e}")
-
-def get_klines(symbol="SOLUSDT", interval="1h", limit=LIMIT):
-    try:
-        print(f"[INFO] Buscando dados de {symbol}...")
-        response = requests.get("https://api.bitget.com/api/v2/spot/market/candles",
-            params={"symbol": symbol, "granularity": interval, "limit": limit})
-        data = response.json()
-        if "data" in data:
-            return list(reversed(data["data"]))
-        else:
-            print(f"[WARN] Resposta inesperada: {data}")
-            return []
-    except Exception as e:
-        print(f"[ERRO] Erro ao buscar candles: {e}")
-        return []
-
-def analisar_padrao(candles):
-    if len(candles) < 2:
-        return False, None
-
-    anterior = candles[-2]
-    atual = candles[-1]
-    o1, c1 = float(anterior[1]), float(anterior[4])
-    o2, c2 = float(atual[1]), float(atual[4])
-
-    if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
-        return True, c2
-    return False, None
-
-def main():
-    global estado_atual
-    print("[START] Bot de sinais rodando...")
-    while True:
-        candles = get_klines("SOLUSDT", "1h")
-        if candles:
-            detectado, preco = analisar_padrao(candles)
-            if detectado:
-                tp = preco + TP_MULT * (preco * 0.01)
-                sl = preco - SL_MULT * (preco * 0.01)
-                mensagem = (
-                    f"*Sinal Detectado!*\n\n"
-                    f"Moeda: *SOLUSDT*\n"
-                    f"Padrão: *Engolfo de Alta*\n"
-                    f"Preço Entrada: *{preco:.4f}*\n"
-                    f"Take Profit: *{tp:.4f}*\n"
-                    f"Stop Loss: *{sl:.4f}*\n"
-                    f"Valor Entrada: *${ENTRADA_USDT}*"
-                )
-                estado_atual["status"] = "Sinal encontrado"
-                estado_atual["ultimo_sinal"] = mensagem
-                send_telegram(mensagem)
-            else:
-                estado_atual["status"] = "Nenhum sinal no momento"
-                estado_atual["ultimo_sinal"] = None
-        else:
-            estado_atual["status"] = "Erro ao buscar dados"
-            estado_atual["ultimo_sinal"] = None
-
-        time.sleep(60)  # 1 minuto
-
-if __name__ == "__main__":
-    Thread(target=main).start()
-    app.run(host="0.0.0.0", port=10000)
+app.run(host="0.0.0.0", port=5000)
