@@ -5,7 +5,6 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Configuração
-API_KEY = "0b422d5f18874c8996e04ab8ea01fad1"
 VALOR_ENTRADA_USD = 10
 LIQUIDEZ_MINIMA = 1500
 HOLDERS_MINIMO = 50
@@ -14,39 +13,35 @@ TAXA_MAXIMA = 0.05
 MAX_SUPPLY_POR_CARTEIRA = 0.15
 TWITTER_SEGUIDORES_MINIMO = 500
 
-# Armazenar histórico de avaliações
 log_analises = []
 
-# Função para buscar tokens novos na Solana via Birdeye
-def buscar_tokens_birdeye():
-    url = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
-    headers = {
-        "X-API-KEY": API_KEY,
-        "x-chain": "solana"
-    }
-    response = requests.get(url, headers=headers)
+# Função para buscar os pares da Solana via GeckoTerminal
+def buscar_tokens_gecko():
+    url = "https://api.geckoterminal.com/api/v2/networks/solana/pools?page=1"
+    response = requests.get(url)
     if response.status_code == 200:
         return response.json().get("data", [])
     return []
 
-# Simulação de dados extras (esses serão reais depois)
-def simular_dados_extras(token):
+# Simula dados complementares até termos fontes reais
+def simular_dados_extras(pool):
+    attrs = pool.get("attributes", {})
     return {
-        "liquidez": 2000,
+        "nome": attrs.get("name", "Sem nome"),
+        "liquidez": float(attrs.get("reserve_in_usd", 0)),
         "holders": 60,
-        "volume_2h": 6000,
+        "volume_2h": float(attrs.get("volume_usd", {}).get("h1", 0)) * 2,
         "contrato_seguro": True,
         "taxa_total": 0.03,
         "maior_wallet_pct": 0.14,
         "twitter_seguidores": 750,
         "tem_site": True,
-        "preco_inicial": float(token.get("price", 0.0005)),
-        "preco_atual": float(token.get("price", 0.0005))
+        "preco": float(attrs.get("base_token_price_usd", 0.0005))
     }
 
-# Avaliar token com base na Regra do Degem Sábio
-def avaliar_token(token):
-    extras = simular_dados_extras(token)
+# Avalia os critérios da Regra do Degem Sábio
+def avaliar_token(pool):
+    extras = simular_dados_extras(pool)
     falhas = []
 
     if extras["liquidez"] < LIQUIDEZ_MINIMA:
@@ -67,16 +62,16 @@ def avaliar_token(token):
         falhas.append("SEM SITE")
 
     aprovado = len(falhas) == 0
-    entrada_valor_atual = (VALOR_ENTRADA_USD / extras["preco_inicial"]) * extras["preco_atual"]
+    valor_atual = (VALOR_ENTRADA_USD / extras["preco"]) * extras["preco"]
 
     resultado = {
-        "nome": token.get("name", "Sem nome"),
+        "nome": extras["nome"],
         "aprovado": aprovado,
         "falhas": falhas,
-        "valor_atual": round(entrada_valor_atual, 2),
-        "lucro_prejuizo": round(entrada_valor_atual - VALOR_ENTRADA_USD, 2),
-        "preco_inicial": extras["preco_inicial"],
-        "preco_atual": extras["preco_atual"],
+        "valor_atual": round(valor_atual, 2),
+        "lucro_prejuizo": round(valor_atual - VALOR_ENTRADA_USD, 2),
+        "preco_inicial": extras["preco"],
+        "preco_atual": extras["preco"],
         "avaliado_em": datetime.utcnow().isoformat() + "Z"
     }
 
@@ -88,8 +83,8 @@ def avaliar_token(token):
 
 @app.route("/tokens")
 def listar_tokens():
-    tokens = buscar_tokens_birdeye()
-    resultados = [avaliar_token(t) for t in tokens[:10]]
+    pools = buscar_tokens_gecko()
+    resultados = [avaliar_token(p) for p in pools[:10]]
     return jsonify(resultados)
 
 @app.route("/logs")
