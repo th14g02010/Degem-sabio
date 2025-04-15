@@ -1,74 +1,104 @@
+import time
 import requests
-from flask import Flask, jsonify
-from datetime import datetime
+import os
+from flask import Flask
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# Configuração
-API_KEY = "0b422d5f18874c8996e04ab8ea01fad1"
-VALOR_ENTRADA_USD = 10
-LIQUIDEZ_MINIMA = 1500
-HOLDERS_MINIMO = 50
-VOLUME_MINIMO = 5000
-TAXA_MAXIMA = 0.05
-MAX_SUPPLY_POR_CARTEIRA = 0.15
-TWITTER_SEGUIDORES_MINIMO = 500
+@app.route("/")
+def home():
+    return "Bot de sinais ativo com Bitget SPOT", 200
 
-# Função para buscar tokens novos na Solana via Birdeye
-def buscar_tokens_birdeye():
-    url = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
-    headers = {
-        "X-API-KEY": API_KEY,
-        "x-chain": "solana"
+# Configurações
+TP_MULT = 2.0
+SL_MULT = 1.0
+LIMIT = 100
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ENTRADA_USDT = float(os.getenv("ENTRADA_USDT", 50))  # valor padrão da entrada simulada
+
+erro_reportado = False
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json().get("data", [])
-    return []
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"[ERRO] Falha ao enviar mensagem no Telegram: {e}")
 
-# Simulação de dados extras (esses serão reais depois)
-def simular_dados_extras(token):
-    return {
-        "liquidez": 2000,
-        "holders": 60,
-        "volume_2h": 6000,
-        "contrato_seguro": True,
-        "taxa_total": 0.03,
-        "maior_wallet_pct": 0.14,
-        "twitter_seguidores": 750,
-        "tem_site": True,
-        "preco_inicial": float(token.get("price", 0.0005)),
-        "preco_atual": float(token.get("price", 0.0005))
-    }
+def get_klines(symbol="BTCUSDT", interval="1h", limit=LIMIT):
+    try:
+        print(f"[INFO] Buscando dados de {symbol}...")
+        response = requests.get(f"https://api.bitget.com/api/v2/spot/market/candles",
+            params={"symbol": symbol, "granularity": interval, "limit": limit}
+        )
+        data = response.json()
+        if "data" in data:
+            print(f"[INFO] Dados recebidos com sucesso para {symbol}.")
+            return list(reversed(data["data"]))
+        else:
+            print(f"[WARN] Resposta inesperada da API: {data}")
+            return []
+    except Exception as e:
+        print(f"[ERRO] Erro ao buscar candles: {e}")
+        return []
 
-# Avaliar token com base na Regra do Degem Sábio
-def avaliar_token(token):
-    extras = simular_dados_extras(token)
-    aprovado = (
-        extras["liquidez"] >= LIQUIDEZ_MINIMA and
-        extras["holders"] >= HOLDERS_MINIMO and
-        extras["volume_2h"] >= VOLUME_MINIMO and
-        extras["contrato_seguro"] and
-        extras["taxa_total"] <= TAXA_MAXIMA and
-        extras["maior_wallet_pct"] <= MAX_SUPPLY_POR_CARTEIRA and
-        extras["twitter_seguidores"] >= TWITTER_SEGUIDORES_MINIMO and
-        extras["tem_site"]
-    )
-    entrada_valor_atual = (VALOR_ENTRADA_USD / extras["preco_inicial"]) * extras["preco_atual"]
-    return {
-        "nome": token.get("name", "Sem nome"),
-        "aprovado": aprovado,
-        "valor_atual": round(entrada_valor_atual, 2),
-        "lucro_prejuizo": round(entrada_valor_atual - VALOR_ENTRADA_USD, 2),
-        "preco_inicial": extras["preco_inicial"],
-        "preco_atual": extras["preco_atual"],
-        "avaliado_em": datetime.utcnow().isoformat() + "Z"
-    }
+def analisar_padrao(candles):
+    try:
+        if len(candles) < 2:
+            print("[WARN] Não há candles suficientes para análise.")
+            return False, None
 
-@app.route("/tokens")
-def listar_tokens():
-    tokens_birdeye = buscar_tokens_birdeye()
-    resultados = [avaliar_token(t) for t in tokens_birdeye[:10]]  # Limita a 10 para performance
-    return jsonify(resultados)
+        anterior = candles[-2]
+        atual = candles[-1]
 
-app.run(host="0.0.0.0", port=5000)
+        o1, c1 = float(anterior[1]), float(anterior[4])
+        o2, c2 = float(atual[1]), float(atual[4])
+
+        if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
+            print("[INFO] Padrão de engolfo de alta detectado.")
+            return True, c2
+        else:
+            print("[INFO] Nenhum padrão encontrado nesse ciclo.")
+            return False, None
+    except Exception as e:
+        print(f"[ERRO] Erro na análise de padrão: {e}")
+        return False, None
+
+def main():
+    print("[START] Iniciando bot de sinais Bitget...")
+    while True:
+        candles = get_klines("SOLUSDT", "1h")
+        if candles:
+            padrao_detectado, preco_entrada = analisar_padrao(candles)
+            if padrao_detectado:
+                tp = preco_entrada + (TP_MULT * (preco_entrada * 0.01))
+                sl = preco_entrada - (SL_MULT * (preco_entrada * 0.01))
+                mensagem = (
+                    f"*Sinal Detectado!*\n\n"
+                    f"Moeda: *SOLUSDT*\n"
+                    f"Padrão: *Engolfo de Alta*\n"
+                    f"Preço de Entrada: *{preco_entrada:.4f}*\n"
+                    f"Take Profit: *{tp:.4f}*\n"
+                    f"Stop Loss: *{sl:.4f}*\n"
+                    f"Valor Entrada: *${ENTRADA_USDT}*\n"
+                    f"Tendência: *Alta*\n"
+                )
+                send_telegram(mensagem)
+        else:
+            print("[WARN] Nenhum dado retornado pela API para SOLUSDT.")
+
+        time.sleep(300)  # Espera 5 minutos antes de rodar novamente
+
+if __name__ == "__main__":
+    from threading import Thread
+    Thread(target=main).start()
+    app.run(host="0.0.0.0", port=10000)
