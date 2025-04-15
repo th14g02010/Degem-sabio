@@ -5,7 +5,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Configurações da Regra do Degem Sábio
+# Configurações
 VALOR_ENTRADA_USD = 10
 LIQUIDEZ_MINIMA = 1500
 HOLDERS_MINIMO = 50
@@ -14,9 +14,10 @@ TAXA_MAXIMA = 0.05
 MAX_SUPPLY_POR_CARTEIRA = 0.15
 TWITTER_SEGUIDORES_MINIMO = 500
 
-# Cache de dados
+# Estado do bot
 log_analises = []
 cache_aprovados = []
+tokens_analisados_ids = set()
 
 # HTML Template
 HTML_TEMPLATE = """
@@ -63,19 +64,22 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# Buscar tokens da GeckoTerminal
-def buscar_tokens_gecko():
-    url = "https://api.geckoterminal.com/api/v2/networks/solana/pools?page=1"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json().get("data", [])
-    return []
+# Buscar tokens da GeckoTerminal (várias páginas)
+def buscar_tokens_gecko(paginas=5):
+    tokens = []
+    for page in range(1, paginas + 1):
+        url = f"https://api.geckoterminal.com/api/v2/networks/solana/pools?page={page}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            tokens += response.json().get("data", [])
+    return tokens
 
-# Simular dados extras para análise (pode ser substituído por dados reais)
+# Simular dados complementares
 def simular_dados_extras(pool):
     attrs = pool.get("attributes", {})
     return {
         "nome": attrs.get("name", "Sem nome"),
+        "id": pool.get("id"),
         "liquidez": float(attrs.get("reserve_in_usd", 0)),
         "holders": 60,
         "volume_2h": float(attrs.get("volume_usd", {}).get("h1", 0)) * 2,
@@ -87,9 +91,13 @@ def simular_dados_extras(pool):
         "preco": float(attrs.get("base_token_price_usd", 0.0005))
     }
 
-# Avaliar token com base na regra do Degem Sábio
+# Avaliação dos critérios
 def avaliar_token(pool):
     extras = simular_dados_extras(pool)
+    if extras["id"] in tokens_analisados_ids:
+        return None
+
+    tokens_analisados_ids.add(extras["id"])
     falhas = []
 
     if extras["liquidez"] < LIQUIDEZ_MINIMA:
@@ -126,12 +134,17 @@ def avaliar_token(pool):
 def escanear_periodicamente():
     global cache_aprovados, log_analises
     try:
-        pools = buscar_tokens_gecko()
-        resultados = [avaliar_token(p) for p in pools[:10]]
-        cache_aprovados = [r for r in resultados if r["status"] == "APROVADO"]
-        log_analises.extend(resultados)
-        log_analises = log_analises[-50:]
-        print(f"[{datetime.utcnow().isoformat()}] Escaneamento feito com {len(resultados)} tokens.")
+        pools = buscar_tokens_gecko(paginas=5)
+        novos = []
+        for pool in pools:
+            resultado = avaliar_token(pool)
+            if resultado:
+                novos.append(resultado)
+        if novos:
+            cache_aprovados = [r for r in novos if r["status"] == "APROVADO"]
+            log_analises.extend(novos)
+            log_analises = log_analises[-50:]
+            print(f"[{datetime.utcnow().isoformat()}] Escaneados: {len(novos)} novos tokens")
     except Exception as e:
         print("Erro ao escanear:", e)
     threading.Timer(180.0, escanear_periodicamente).start()
@@ -144,6 +157,6 @@ def mostrar_aprovados():
 def mostrar_logs():
     return render_template_string(HTML_TEMPLATE, tokens=log_analises, titulo="Logs do Bot - Degem Sábio")
 
-# Inicia escaneamento recorrente
+# Iniciar escaneamento
 escanear_periodicamente()
 app.run(host="0.0.0.0", port=5000)
