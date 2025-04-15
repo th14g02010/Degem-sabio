@@ -14,6 +14,9 @@ TAXA_MAXIMA = 0.05
 MAX_SUPPLY_POR_CARTEIRA = 0.15
 TWITTER_SEGUIDORES_MINIMO = 500
 
+# Armazenar histórico de avaliações
+log_analises = []
+
 # Função para buscar tokens novos na Solana via Birdeye
 def buscar_tokens_birdeye():
     url = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
@@ -66,11 +69,7 @@ def avaliar_token(token):
     aprovado = len(falhas) == 0
     entrada_valor_atual = (VALOR_ENTRADA_USD / extras["preco_inicial"]) * extras["preco_atual"]
 
-    log = f"[{datetime.utcnow().isoformat()}] Token: {token.get('name', 'Sem nome')} - "
-    log += "APROVADO" if aprovado else f"REPROVADO ({', '.join(falhas)})"
-    print(log)
-
-    return {
+    resultado = {
         "nome": token.get("name", "Sem nome"),
         "aprovado": aprovado,
         "falhas": falhas,
@@ -81,10 +80,20 @@ def avaliar_token(token):
         "avaliado_em": datetime.utcnow().isoformat() + "Z"
     }
 
+    log_analises.append(resultado)
+    if len(log_analises) > 50:
+        log_analises.pop(0)
+
+    return resultado
+
 @app.route("/tokens")
 def listar_tokens():
     tokens = buscar_tokens_birdeye()
     resultados = [avaliar_token(t) for t in tokens[:10]]
     return jsonify(resultados)
+
+@app.route("/logs")
+def mostrar_logs():
+    return jsonify(log_analises)
 
 app.run(host="0.0.0.0", port=5000)
