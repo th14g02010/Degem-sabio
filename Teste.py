@@ -1,22 +1,17 @@
 import requests
 
-API_KEY = "0b422d5f18874c8996e04ab8ea01fad1"
-
-def testar_conexao_birdeye():
-    url = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
-    headers = {
-        "X-API-KEY": API_KEY,
-        "x-chain": "solana"
-    }
-    response = requests.get(url, headers=headers)
+def testar_conexao_dexscreener():
+    url = "https://api.dexscreener.com/latest/dex/pairs/solana"
+    response = requests.get(url)
     
     print("Status Code:", response.status_code)
     
     if response.status_code == 200:
         data = response.json()
-        print("Tokens recebidos:", len(data.get("data", [])))
-        print("Exemplo:", data.get("data", [])[0] if data.get("data") else "Nenhum token")
+        print("Total de tokens recebidos:", len(data.get("pairs", [])))
+        exemplo = data.get("pairs", [])[0] if data.get("pairs") else None
+        print("Exemplo:", exemplo)
     else:
         print("Erro na requisição:", response.text)
 
-testar_conexao_birdeye()
+testar_conexao_dexscreener()
